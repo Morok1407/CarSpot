@@ -1,6 +1,8 @@
 pub mod parking;
+pub mod visits;
 use parking::{ParkingDb, Result, SpotDto, SpotInput, SpotStatus};
 use tokio::sync::OnceCell;
+use visits::{AdmissionInput, PaymentMethod};
 
 #[derive(Default)]
 struct AppState(OnceCell<ParkingDb>);
@@ -53,6 +55,46 @@ async fn delete_parking_spot(state: tauri::State<'_, AppState>, id: String) -> R
 async fn seed_parking_spots(state: tauri::State<'_, AppState>) -> Result<u32> {
     state.db().await?.seed().await
 }
+#[tauri::command]
+async fn admit_vehicle(
+    state: tauri::State<'_, AppState>,
+    id: String,
+    input: AdmissionInput,
+) -> Result<SpotDto> {
+    state.db().await?.admit(&id, input).await
+}
+#[tauri::command]
+async fn revise_visit(
+    state: tauri::State<'_, AppState>,
+    id: String,
+    visit_id: String,
+    input: AdmissionInput,
+) -> Result<SpotDto> {
+    state.db().await?.revise_visit(&id, &visit_id, input).await
+}
+#[tauri::command]
+async fn pay_visit(
+    state: tauri::State<'_, AppState>,
+    id: String,
+    visit_id: String,
+    departure_at_ms: i64,
+    method: PaymentMethod,
+    expected_amount: i64,
+) -> Result<SpotDto> {
+    state
+        .db()
+        .await?
+        .pay(&id, &visit_id, departure_at_ms, method, expected_amount)
+        .await
+}
+#[tauri::command]
+async fn checkout_vehicle(
+    state: tauri::State<'_, AppState>,
+    id: String,
+    visit_id: String,
+) -> Result<SpotDto> {
+    state.db().await?.checkout(&id, &visit_id).await
+}
 pub fn run() {
     tauri::Builder::default()
         .manage(AppState::default())
@@ -63,7 +105,11 @@ pub fn run() {
             create_parking_spot,
             update_parking_spot,
             delete_parking_spot,
-            seed_parking_spots
+            seed_parking_spots,
+            admit_vehicle,
+            revise_visit,
+            pay_visit,
+            checkout_vehicle
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

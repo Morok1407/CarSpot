@@ -14,7 +14,7 @@ pub struct ApiError {
     pub message: String,
 }
 
-fn error(code: &'static str, message: &str) -> ApiError {
+pub(crate) fn error(code: &'static str, message: &str) -> ApiError {
     ApiError {
         code,
         message: message.into(),
@@ -25,6 +25,7 @@ impl From<mongodb::error::Error> for ApiError {
     fn from(value: mongodb::error::Error) -> Self {
         use mongodb::error::{ErrorKind, WriteFailure};
         if matches!(value.kind.as_ref(), ErrorKind::Write(WriteFailure::WriteError(e)) if e.code == 11000)
+            || matches!(value.kind.as_ref(), ErrorKind::Command(e) if e.code == 11000)
         {
             return error("conflict", "Номер места или госномер уже используется");
         }
@@ -97,6 +98,10 @@ pub struct Spot {
     pub data: SpotInput,
     created_at: DateTime,
     updated_at: DateTime,
+    #[serde(default)]
+    pub active_visit: Option<crate::visits::Visit>,
+    #[serde(default)]
+    pub last_visit: Option<crate::visits::Visit>,
 }
 
 #[derive(Debug, Serialize)]
@@ -106,6 +111,8 @@ pub struct SpotDto {
     pub data: SpotInput,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
+    pub active_visit: Option<crate::visits::Visit>,
+    pub last_visit: Option<crate::visits::Visit>,
 }
 
 impl From<Spot> for SpotDto {
@@ -115,16 +122,18 @@ impl From<Spot> for SpotDto {
             data: s.data,
             created_at_ms: s.created_at.timestamp_millis(),
             updated_at_ms: s.updated_at.timestamp_millis(),
+            active_visit: s.active_visit,
+            last_visit: s.last_visit,
         }
     }
 }
 
-fn object_id(id: &str) -> Result<ObjectId> {
+pub(crate) fn object_id(id: &str) -> Result<ObjectId> {
     ObjectId::parse_str(id).map_err(|_| error("validation", "Некорректный идентификатор места"))
 }
 
 pub struct ParkingDb {
-    spots: Collection<Spot>,
+    pub(crate) spots: Collection<Spot>,
 }
 
 impl ParkingDb {
@@ -180,6 +189,8 @@ impl ParkingDb {
             data: input.validate()?,
             created_at: now,
             updated_at: now,
+            active_visit: None,
+            last_visit: None,
         };
         self.spots.insert_one(&spot).await?;
         Ok(spot.into())
@@ -226,11 +237,11 @@ impl ParkingDb {
             to_document(&input).map_err(|_| error("validation", "Ошибка сериализации места"))?;
         fields.insert("updated_at", DateTime::now());
         self.spots
-            .find_one_and_update(doc! { "_id": object_id(id)? }, doc! { "$set": fields })
+            .find_one_and_update(doc! { "_id": object_id(id)?, "active_visit": null }, doc! { "$set": fields })
             .return_document(ReturnDocument::After)
             .await?
             .map(Into::into)
-            .ok_or_else(|| error("not_found", "Место не найдено"))
+            .ok_or_else(|| error("conflict", "Место не найдено или имеет активную стоянку. Используйте операции оплаты и выезда"))
     }
 
     pub async fn delete(&self, id: &str) -> Result<()> {
@@ -269,6 +280,8 @@ impl ParkingDb {
                     },
                     created_at: now,
                     updated_at: now,
+                    active_visit: None,
+                    last_visit: None,
                 };
                 let fields = to_document(&spot)
                     .map_err(|_| error("validation", "Ошибка сериализации места"))?;

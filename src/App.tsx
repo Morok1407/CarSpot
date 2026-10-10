@@ -9,21 +9,24 @@ import {
 import { Icon, type IconName } from "./components/Icon";
 import { ConfirmDialog, SpotForm, type FormMode } from "./components/SpotForm";
 import {
+  AdmissionDialog,
+  PaymentDialog,
+  VisitSummary,
+} from "./components/VisitOperations";
+import {
   dateTime,
   errorMessage,
   shortVehicleLabels,
-  spotInput,
   statusLabels,
   vehicleLabels,
   vehicleTypes,
 } from "./parking";
 import "./App.css";
 
-type Page = "overview" | "map" | "list";
+type Page = "overview" | "parking";
 const pages: { id: Page; title: string; icon: IconName }[] = [
   { id: "overview", title: "Обзор", icon: "grid" },
-  { id: "map", title: "Схема парковки", icon: "map" },
-  { id: "list", title: "Все места", icon: "list" },
+  { id: "parking", title: "Парковка", icon: "map" },
 ];
 function Badge({ status }: { status: SpotStatus }) {
   return (
@@ -35,7 +38,17 @@ function Badge({ status }: { status: SpotStatus }) {
 }
 
 function App() {
-  const [page, setPage] = useState<Page>("map");
+  const [page, setPage] = useState<Page>("parking");
+  const [view, setView] = useState<"map" | "list">("map");
+  const [visitForm, setVisitForm] = useState<{
+    spot?: ParkingSpot;
+    editing?: boolean;
+  } | null>(null);
+  const [paymentSpot, setPaymentSpot] = useState<ParkingSpot | null>(null);
+  function openParking(next: "map" | "list") {
+    setPage("parking");
+    setView(next);
+  }
   const [spots, setSpots] = useState<ParkingSpot[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -136,6 +149,8 @@ function App() {
               <th>Состояние</th>
               <th>Тип транспорта</th>
               <th>Госномер</th>
+              <th>Время въезда</th>
+              <th>Оплата</th>
               <th>Обновлено</th>
               <th>
                 <span className="sr-only">Действия</span>
@@ -166,6 +181,24 @@ function App() {
                     <span className="plate-inline">{s.license_plate}</span>
                   ) : (
                     <span className="muted">—</span>
+                  )}
+                </td>
+                <td className="date-cell">
+                  {s.active_visit ? dateTime(s.active_visit.entry_at_ms) : "—"}
+                </td>
+                <td>
+                  {s.active_visit ? (
+                    <span
+                      className={`badge ${s.active_visit.payment ? "available" : "maintenance"}`}
+                    >
+                      {s.active_visit.payment
+                        ? "Оплачено"
+                        : s.active_visit.tariff_mode === "open"
+                          ? "При выезде"
+                          : "Не оплачено"}
+                    </span>
+                  ) : (
+                    "—"
                   )}
                 </td>
                 <td className="date-cell">{dateTime(s.updated_at_ms)}</td>
@@ -218,7 +251,7 @@ function App() {
             >
               <Icon name={p.icon} />
               {p.title}
-              {p.id === "list" && (
+              {p.id === "parking" && (
                 <span className="nav-count">
                   {updated ? spots.length : "—"}
                 </span>
@@ -256,7 +289,7 @@ function App() {
               value={query}
               onChange={(e) => {
                 setQuery(e.target.value);
-                if (page === "overview") setPage("list");
+                if (page === "overview") openParking("list");
               }}
             />
             {query && (
@@ -299,29 +332,31 @@ function App() {
             </div>
             <div className="page-heading">
               <div>
-                <h1>
-                  {page === "map"
-                    ? "Схема парковки"
-                    : page === "overview"
-                      ? "Обзор парковки"
-                      : "Парковочные места"}
-                </h1>
+                <h1>{page === "overview" ? "Обзор парковки" : "Парковка"}</h1>
                 <p>
-                  {page === "map"
-                    ? "Каждое место под контролем"
-                    : page === "overview"
-                      ? "Всё, что нужно знать о парковке сейчас"
-                      : "Управление местами и припаркованными автомобилями"}
+                  {page === "overview"
+                    ? "Всё, что нужно знать о парковке сейчас"
+                    : "Приём автомобилей, оплата и выезд"}
                 </p>
               </div>
-              <button
-                disabled={unavailable}
-                className="button primary"
-                onClick={() => setForm({ mode: "create" })}
-              >
-                <Icon name="plus" size={18} />
-                Добавить место
-              </button>
+              <div className="heading-actions">
+                <button
+                  disabled={unavailable || !counts.available}
+                  className="button primary"
+                  onClick={() => setVisitForm({})}
+                >
+                  <Icon name="car" size={18} />
+                  Принять автомобиль
+                </button>
+                <button
+                  disabled={unavailable}
+                  className="button secondary"
+                  onClick={() => setForm({ mode: "create" })}
+                >
+                  <Icon name="plus" size={18} />
+                  Добавить место
+                </button>
+              </div>
             </div>
             {loadError && (
               <div className="error-banner" role="alert">
@@ -427,7 +462,7 @@ function App() {
                         </p>
                         <button
                           className="text-button"
-                          onClick={() => setPage("map")}
+                          onClick={() => openParking("map")}
                         >
                           Открыть схему
                           <Icon name="arrow" size={17} />
@@ -477,7 +512,7 @@ function App() {
                     </h2>
                     <button
                       className="text-button"
-                      onClick={() => setPage("list")}
+                      onClick={() => openParking("list")}
                     >
                       Все места
                       <Icon name="arrow" size={16} />
@@ -496,8 +531,8 @@ function App() {
                         {loading ? "Загружаем парковку…" : "Пока нет мест"}
                       </h3>
                       <p>
-                        Добавьте первое место или заполните парковку на вкладке
-                        «Все места».
+                        Добавьте первое место или заполните парковку в разделе
+                        «Парковка».
                       </p>
                     </div>
                   )}
@@ -508,15 +543,15 @@ function App() {
                 <div className="parking-toolbar">
                   <div className="view-switch" aria-label="Вид парковки">
                     <button
-                      className={page === "map" ? "active" : ""}
-                      onClick={() => setPage("map")}
+                      className={view === "map" ? "active" : ""}
+                      onClick={() => openParking("map")}
                     >
                       <Icon name="map" size={17} />
                       Схема
                     </button>
                     <button
-                      className={page === "list" ? "active" : ""}
-                      onClick={() => setPage("list")}
+                      className={view === "list" ? "active" : ""}
+                      onClick={() => openParking("list")}
                     >
                       <Icon name="list" size={17} />
                       Список
@@ -554,7 +589,13 @@ function App() {
                     <button
                       className={`icon-button refresh ${loading ? "spinning" : ""}`}
                       aria-label="Обновить данные"
-                      disabled={loading || !!form || !!confirm}
+                      disabled={
+                        loading ||
+                        !!form ||
+                        !!confirm ||
+                        !!visitForm ||
+                        !!paymentSpot
+                      }
                       onClick={() => void refresh()}
                     >
                       <Icon name="refresh" size={18} />
@@ -631,7 +672,7 @@ function App() {
                       )
                     )}
                   </div>
-                ) : page === "list" ? (
+                ) : view === "list" ? (
                   table(filtered)
                 ) : (
                   <div className="parking-map">
@@ -830,37 +871,68 @@ function App() {
                     </div>
                   </dl>
                 </div>
+                {selected.active_visit && (
+                  <VisitSummary visit={selected.active_visit} />
+                )}
+                {!selected.active_visit && selected.last_visit && (
+                  <VisitSummary visit={selected.last_visit} completed />
+                )}
                 <div className="detail-actions">
-                  {selected.status === "available" && (
-                    <button
-                      disabled={unavailable}
-                      className="button primary"
-                      onClick={() =>
-                        setForm({ mode: "occupy", spot: selected })
-                      }
-                    >
-                      <Icon name="car" size={18} />
-                      Занять место
-                    </button>
+                  {!selected.active_visit &&
+                    selected.status !== "maintenance" && (
+                      <button
+                        disabled={unavailable}
+                        className="button primary"
+                        onClick={() => setVisitForm({ spot: selected })}
+                      >
+                        <Icon name="car" size={18} />
+                        {selected.status === "occupied"
+                          ? "Оформить текущую стоянку"
+                          : "Принять автомобиль"}
+                      </button>
+                    )}
+                  {selected.active_visit && !selected.active_visit.payment && (
+                    <>
+                      <button
+                        disabled={unavailable}
+                        className="button primary"
+                        onClick={() => setPaymentSpot(selected)}
+                      >
+                        <Icon name="check" size={18} />
+                        Оплатить
+                      </button>
+                      <button
+                        disabled={unavailable}
+                        className="button secondary"
+                        onClick={() =>
+                          setVisitForm({ spot: selected, editing: true })
+                        }
+                      >
+                        <Icon name="clock" size={17} />
+                        Изменить время и тариф
+                      </button>
+                    </>
                   )}
-                  {selected.status === "occupied" && (
+                  {selected.active_visit && (
                     <button
-                      disabled={unavailable}
+                      disabled={unavailable || !selected.active_visit.payment}
                       className="button primary"
                       onClick={() => setConfirm("release")}
                     >
                       <Icon name="exit" size={18} />
-                      Освободить место
+                      Оформить выезд
                     </button>
                   )}
-                  <button
-                    disabled={unavailable}
-                    className="button secondary"
-                    onClick={() => setForm({ mode: "edit", spot: selected })}
-                  >
-                    <Icon name="edit" size={17} />
-                    Редактировать
-                  </button>
+                  {!selected.active_visit && (
+                    <button
+                      disabled={unavailable}
+                      className="button secondary"
+                      onClick={() => setForm({ mode: "edit", spot: selected })}
+                    >
+                      <Icon name="edit" size={17} />
+                      Редактировать
+                    </button>
+                  )}
                   <button
                     disabled={unavailable || selected.status === "occupied"}
                     className="delete-button"
@@ -871,7 +943,9 @@ function App() {
                   </button>
                   {selected.status === "occupied" && (
                     <p className="detail-hint">
-                      Для удаления сначала освободите место.
+                      {selected.active_visit
+                        ? "Выезд доступен после оплаты. После выезда место освободится."
+                        : "Укажите время и тариф для текущего автомобиля перед оплатой."}
                     </p>
                   )}
                 </div>
@@ -949,21 +1023,43 @@ function App() {
           }}
         />
       )}
-      {confirm === "release" && selected && (
+      {confirm === "release" && selected?.active_visit && (
         <ConfirmDialog
-          title={`Освободить место ${selected.number}?`}
-          description={`Госномер ${selected.license_plate} будет убран, место станет доступным. Эта операция не рассчитывает оплату и не создаёт талон выезда.`}
-          action="Освободить"
+          title={`Оформить выезд с места ${selected.number}?`}
+          description={`Оплата автомобиля ${selected.license_plate} уже отмечена. Место будет освобождено, данные последнего визита и оплаты сохранятся. Для открытого тарифа будет сохранено время выезда, указанное при оплате.`}
+          action="Оформить выезд"
           onClose={() => setConfirm(null)}
           onConfirm={async () => {
             upsert(
-              await parkingApi.update(selected.id, {
-                ...spotInput(selected),
-                status: "available",
-                license_plate: null,
-              }),
+              await parkingApi.checkout(selected.id, selected.active_visit!.id),
             );
             setNotice(`Место ${selected.number} свободно`);
+          }}
+        />
+      )}
+      {visitForm && (
+        <AdmissionDialog
+          spots={spots}
+          initialSpot={visitForm.spot}
+          editing={visitForm.editing}
+          onClose={() => setVisitForm(null)}
+          onSaved={(s) => {
+            upsert(s);
+            setNotice(
+              visitForm.editing
+                ? "Условия стоянки обновлены"
+                : `Автомобиль принят на место ${s.number}`,
+            );
+          }}
+        />
+      )}
+      {paymentSpot && (
+        <PaymentDialog
+          spot={paymentSpot}
+          onClose={() => setPaymentSpot(null)}
+          onSaved={(s) => {
+            upsert(s);
+            setNotice("Оплата зафиксирована");
           }}
         />
       )}
@@ -1005,11 +1101,12 @@ function HelpDialog({ onClose }: { onClose: () => void }) {
       <p>Выберите место на схеме или в списке, чтобы открыть его карточку.</p>
       <ul>
         <li>
-          <strong>Занять место</strong> — указать госномер автомобиля.
+          <strong>Принять автомобиль</strong> — выбрать место, ввести госномер,
+          время въезда и тариф. Открытый тариф рассчитывается по факту выезда.
         </li>
         <li>
-          <strong>Освободить</strong> — убрать госномер и сделать место
-          доступным.
+          <strong>Оплатить</strong> — отметить полученную оплату наличными или
+          картой. После оплаты нажмите «Оформить выезд».
         </li>
         <li>
           <strong>Редактировать</strong> — изменить номер, тип транспорта или
@@ -1017,8 +1114,9 @@ function HelpDialog({ onClose }: { onClose: () => void }) {
         </li>
       </ul>
       <p className="muted">
-        Кнопка обновления загружает актуальные данные. Учёт платежей,
-        бронирования и история въездов пока не подключены.
+        Схема и список переключаются внутри раздела «Парковка». Кнопка
+        обновления загружает актуальные данные. Оплата фиксируется без списания
+        денег с карты. В карточке сохраняется последний завершённый визит.
       </p>
       <button className="button primary" onClick={onClose}>
         Понятно
