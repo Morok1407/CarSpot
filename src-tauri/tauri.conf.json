@@ -12,9 +12,11 @@
   "app": {
     "windows": [
       {
-        "title": "carspot",
-        "width": 800,
-        "height": 600
+        "title": "CarSpot — Управление парковкой",
+        "width": 1440,
+        "height": 960,
+        "minWidth": 800,
+        "minHeight": 600
       }
     ],
     "security": {
