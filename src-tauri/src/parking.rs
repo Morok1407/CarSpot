@@ -100,8 +100,6 @@ pub struct Spot {
     updated_at: DateTime,
     #[serde(default)]
     pub active_visit: Option<crate::visits::Visit>,
-    #[serde(default)]
-    pub last_visit: Option<crate::visits::Visit>,
 }
 
 #[derive(Debug, Serialize)]
@@ -112,7 +110,6 @@ pub struct SpotDto {
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
     pub active_visit: Option<crate::visits::Visit>,
-    pub last_visit: Option<crate::visits::Visit>,
 }
 
 impl From<Spot> for SpotDto {
@@ -123,7 +120,6 @@ impl From<Spot> for SpotDto {
             created_at_ms: s.created_at.timestamp_millis(),
             updated_at_ms: s.updated_at.timestamp_millis(),
             active_visit: s.active_visit,
-            last_visit: s.last_visit,
         }
     }
 }
@@ -134,6 +130,7 @@ pub(crate) fn object_id(id: &str) -> Result<ObjectId> {
 
 pub struct ParkingDb {
     pub(crate) spots: Collection<Spot>,
+    pub(crate) history: Collection<crate::history::CompletedVisit>,
 }
 
 impl ParkingDb {
@@ -171,7 +168,12 @@ impl ParkingDb {
                     .build(),
             )
             .await?;
-        Ok(Self { spots })
+        let result = Self {
+            spots,
+            history: db.collection("completed_visits"),
+        };
+        result.initialize_history().await?;
+        Ok(result)
     }
 
     pub async fn from_env() -> Result<Self> {
@@ -190,7 +192,6 @@ impl ParkingDb {
             created_at: now,
             updated_at: now,
             active_visit: None,
-            last_visit: None,
         };
         self.spots.insert_one(&spot).await?;
         Ok(spot.into())
@@ -281,7 +282,6 @@ impl ParkingDb {
                     created_at: now,
                     updated_at: now,
                     active_visit: None,
-                    last_visit: None,
                 };
                 let fields = to_document(&spot)
                     .map_err(|_| error("validation", "Ошибка сериализации места"))?;

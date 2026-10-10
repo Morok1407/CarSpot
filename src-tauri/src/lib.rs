@@ -1,8 +1,9 @@
+pub mod history;
 pub mod parking;
 pub mod visits;
 use parking::{ParkingDb, Result, SpotDto, SpotInput, SpotStatus};
 use tokio::sync::OnceCell;
-use visits::{AdmissionInput, PaymentMethod};
+use visits::{AdmissionInput, PaymentMethod, PaymentSplit};
 
 #[derive(Default)]
 struct AppState(OnceCell<ParkingDb>);
@@ -80,11 +81,19 @@ async fn pay_visit(
     departure_at_ms: i64,
     method: PaymentMethod,
     expected_amount: i64,
+    split: Option<PaymentSplit>,
 ) -> Result<SpotDto> {
     state
         .db()
         .await?
-        .pay(&id, &visit_id, departure_at_ms, method, expected_amount)
+        .pay(
+            &id,
+            &visit_id,
+            departure_at_ms,
+            method,
+            expected_amount,
+            split,
+        )
         .await
 }
 #[tauri::command]
@@ -94,6 +103,18 @@ async fn checkout_vehicle(
     visit_id: String,
 ) -> Result<SpotDto> {
     state.db().await?.checkout(&id, &visit_id).await
+}
+#[tauri::command]
+async fn list_completed_visits(
+    state: tauri::State<'_, AppState>,
+    after: Option<String>,
+    limit: Option<u32>,
+) -> Result<Vec<history::CompletedVisit>> {
+    state
+        .db()
+        .await?
+        .list_completed(after, limit.unwrap_or(200))
+        .await
 }
 pub fn run() {
     tauri::Builder::default()
@@ -109,7 +130,8 @@ pub fn run() {
             admit_vehicle,
             revise_visit,
             pay_visit,
-            checkout_vehicle
+            checkout_vehicle,
+            list_completed_visits
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1747,3 +1747,72 @@ tbody tr.selected-row {
     overflow: auto;
   }
 }
+.payment-methods {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.payment-methods button {
+  padding: 14px 7px;
+}
+.payment-split {
+  padding: 12px 15px;
+  margin-bottom: 16px;
+  border: 1px solid #e6e3f6;
+  border-radius: 6px;
+  background: #f9f7ff;
+  color: #8174ac;
+  font-size: 11px;
+}
+.payment-split > div {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.payment-split small {
+  display: block;
+  font-size: 9px;
+  line-height: 1.7;
+  color: #9e94b9;
+  margin-top: 12px;
+}
+.history-heading {
+  padding: 24px;
+}
+.history-heading h2 {
+  margin: 0 0 8px;
+  font-size: 20px;
+}
+.history-scroll {
+  overflow-x: auto;
+}
+.history-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+.history-table th {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  background: #f8fafc;
+}
+.history-table td,
+.history-table th {
+  padding: 18px 20px;
+  border-bottom: 1px solid #edf0f5;
+}
+.history-table td {
+  font-size: 13px;
+}
+.history-table small {
+  display: block;
+  margin-top: 6px;
+  color: #738198;
+  font-size: 12px;
+}
+.history-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 18px;
+  padding: 20px;
+}

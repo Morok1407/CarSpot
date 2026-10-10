@@ -10,6 +10,34 @@ use serde::{Deserialize, Serialize};
 pub enum PaymentMethod {
     Cash,
     Card,
+    Mixed,
+}
+
+impl PaymentMethod {
+    pub fn split(&self, amount: i64) -> (i64, i64) {
+        match self {
+            Self::Cash => (amount, 0),
+            Self::Card => (0, amount),
+            Self::Mixed => (amount / 2, amount - amount / 2),
+        }
+    }
+
+    fn validate_split(&self, amount: i64, split: Option<PaymentSplit>) -> Result<(i64, i64)> {
+        match (self, split) {
+            (Self::Mixed, Some(s)) if s.cash_amount > 0 && s.card_amount > 0
+                && s.cash_amount.checked_add(s.card_amount) == Some(amount) => Ok((s.cash_amount, s.card_amount)),
+            (Self::Mixed, _) => Err(error("validation", "Укажите положительные суммы наличными и картой. Их сумма должна совпадать со стоимостью стоянки")),
+            (_, None) => Ok(self.split(amount)),
+            (_, Some(_)) => Err(error("validation", "Распределение суммы допустимо только для смешанной оплаты")),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PaymentSplit {
+    pub cash_amount: i64,
+    pub card_amount: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -25,6 +53,10 @@ pub struct Payment {
     pub amount: i64,
     pub paid_at_ms: i64,
     pub departure_at_ms: i64,
+    #[serde(default)]
+    pub cash_amount: Option<i64>,
+    #[serde(default)]
+    pub card_amount: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -151,6 +183,7 @@ impl ParkingDb {
         departure: i64,
         method: PaymentMethod,
         expected_amount: i64,
+        split: Option<PaymentSplit>,
     ) -> Result<SpotDto> {
         let spot = self.get(id).await?;
         let visit = spot
@@ -179,11 +212,14 @@ impl ParkingDb {
                 "Сумма изменилась. Обновите данные и проверьте расчёт",
             ));
         }
+        let (cash_amount, card_amount) = method.validate_split(amount, split)?;
         let payment = Payment {
             method,
             amount,
             departure_at_ms: departure,
             paid_at_ms: DateTime::now().timestamp_millis(),
+            cash_amount: Some(cash_amount),
+            card_amount: Some(card_amount),
         };
         // Проверка тарифа и времени в фильтре защищает от одновременного редактирования.
         self.spots.find_one_and_update(doc! { "_id": object_id(id)?, "active_visit.id": visit_id, "active_visit.payment": null,
@@ -198,6 +234,7 @@ impl ParkingDb {
         let spot = self.get(id).await?;
         let mut visit = spot
             .active_visit
+            .clone()
             .ok_or_else(|| error("conflict", "Нет активной стоянки"))?;
         if visit.id != visit_id {
             return Err(error("conflict", "Стоянка изменилась. Обновите карточку"));
@@ -211,11 +248,10 @@ impl ParkingDb {
         } else {
             DateTime::now().timestamp_millis()
         });
-        // Оплата и последний завершённый визит сохраняются в том же документе атомарно.
-        self.spots.find_one_and_update(doc! { "_id": object_id(id)?, "active_visit.id": visit_id, "active_visit.payment": { "$ne": null } },
-            doc! { "$set": { "active_visit": null, "last_visit": to_bson(&visit).unwrap(), "status": "available", "license_plate": null, "updated_at": DateTime::now() } })
-            .return_document(ReturnDocument::After).await?.map(Into::into)
-            .ok_or_else(|| error("conflict", "Выезд уже зарегистрирован или стоянка изменилась"))
+        self.archive_visit(&crate::history::CompletedVisit::new(&spot, visit))
+            .await?;
+        self.release_archived(id, visit_id).await?;
+        self.get(id).await
     }
 }
 
@@ -224,6 +260,10 @@ mod tests {
     use super::*;
     #[test]
     fn hourly_rounding() {
+        assert_eq!(PaymentMethod::Mixed.split(1000), (500, 500));
+        assert_eq!(PaymentMethod::Mixed.split(501), (250, 251));
+        assert_eq!(PaymentMethod::Cash.split(501), (501, 0));
+        assert_eq!(PaymentMethod::Card.split(501), (0, 501));
         assert_eq!(calculate_amount(0, 1, 500).unwrap(), 500);
         assert_eq!(calculate_amount(0, 3_600_000, 500).unwrap(), 500);
         assert_eq!(calculate_amount(0, 3_600_001, 500).unwrap(), 1000);
@@ -232,6 +272,45 @@ mod tests {
         assert!(calculate_amount(0, 1, 0).is_err());
         assert!(calculate_amount(0, i64::MAX, 500).is_err());
     }
+    #[test]
+    fn mixed_payment_requires_exact_positive_split() {
+        let split = |cash_amount, card_amount| {
+            Some(PaymentSplit {
+                cash_amount,
+                card_amount,
+            })
+        };
+        assert_eq!(
+            PaymentMethod::Mixed
+                .validate_split(1400, split(300, 1100))
+                .unwrap(),
+            (300, 1100)
+        );
+        for (cash, card) in [
+            (300, 1000),
+            (300, 1200),
+            (0, 1400),
+            (-100, 1500),
+            (i64::MAX, 1),
+        ] {
+            assert!(PaymentMethod::Mixed
+                .validate_split(1400, split(cash, card))
+                .is_err());
+        }
+        assert!(PaymentMethod::Mixed.validate_split(1400, None).is_err());
+        assert!(PaymentMethod::Cash
+            .validate_split(1400, split(300, 1100))
+            .is_err());
+        assert_eq!(
+            PaymentMethod::Cash.validate_split(1400, None).unwrap(),
+            (1400, 0)
+        );
+        assert_eq!(
+            PaymentMethod::Card.validate_split(1400, None).unwrap(),
+            (0, 1400)
+        );
+    }
+
     #[tokio::test]
     #[ignore = "Requires local MongoDB; isolated temporary database"]
     async fn visit_lifecycle() {
@@ -277,12 +356,12 @@ mod tests {
         assert!(db.update(&spot.id, base.clone()).await.is_err());
         assert!(db.checkout(&spot.id, &visit_id).await.is_err());
         assert!(db
-            .pay(&spot.id, &visit_id, now, PaymentMethod::Cash, 500)
+            .pay(&spot.id, &visit_id, now, PaymentMethod::Cash, 500, None)
             .await
             .is_err());
         let (a, b) = tokio::join!(
-            db.pay(&spot.id, &visit_id, now, PaymentMethod::Cash, 1000),
-            db.pay(&spot.id, &visit_id, now, PaymentMethod::Card, 1000)
+            db.pay(&spot.id, &visit_id, now, PaymentMethod::Cash, 1000, None),
+            db.pay(&spot.id, &visit_id, now, PaymentMethod::Card, 1000, None)
         );
         assert_eq!(usize::from(a.is_ok()) + usize::from(b.is_ok()), 1);
         assert!(db
@@ -292,11 +371,19 @@ mod tests {
         let completed = db.checkout(&spot.id, &visit_id).await.unwrap();
         assert_eq!(completed.data.status, SpotStatus::Available);
         assert!(completed.active_visit.is_none());
-        assert_eq!(completed.last_visit.unwrap().payment.unwrap().amount, 1000);
+        assert_eq!(
+            db.list_completed(None, 200).await.unwrap()[0]
+                .visit
+                .payment
+                .as_ref()
+                .unwrap()
+                .amount,
+            1000
+        );
         assert!(db.checkout(&spot.id, &visit_id).await.is_err());
         let next = db.admit(&spot.id, admission()).await.unwrap();
         assert!(db
-            .pay(&spot.id, &visit_id, now, PaymentMethod::Cash, 1000)
+            .pay(&spot.id, &visit_id, now, PaymentMethod::Cash, 1000, None)
             .await
             .is_err());
         let next_id = next.active_visit.unwrap().id;
@@ -308,18 +395,34 @@ mod tests {
             hourly_rate: 700,
         };
         db.revise_visit(&spot.id, &next_id, planned).await.unwrap();
-        db.pay(&spot.id, &next_id, now, PaymentMethod::Card, 1400)
-            .await
-            .unwrap();
+        db.pay(
+            &spot.id,
+            &next_id,
+            now,
+            PaymentMethod::Mixed,
+            1400,
+            Some(PaymentSplit {
+                cash_amount: 300,
+                card_amount: 1100,
+            }),
+        )
+        .await
+        .unwrap();
         let reopened = ParkingDb::connect(&uri, &name).await.unwrap();
         let saved = reopened.get(&spot.id).await.unwrap().active_visit.unwrap();
-        assert_eq!(saved.payment.unwrap().amount, 1400);
-        let done = reopened
-            .checkout(&spot.id, &next_id)
-            .await
+        let payment = saved.payment.unwrap();
+        assert_eq!(payment.amount, 1400);
+        assert!(matches!(payment.method, PaymentMethod::Mixed));
+        assert_eq!(payment.cash_amount, Some(300));
+        assert_eq!(payment.card_amount, Some(1100));
+        reopened.checkout(&spot.id, &next_id).await.unwrap();
+        let history = reopened.list_completed(None, 200).await.unwrap();
+        assert_eq!(history.len(), 2);
+        let done = &history
+            .iter()
+            .find(|r| r.visit.id == next_id)
             .unwrap()
-            .last_visit
-            .unwrap();
+            .visit;
         assert!(done.exited_at_ms.unwrap() <= DateTime::now().timestamp_millis());
         assert_eq!(done.tariff_mode, TariffMode::Planned);
         Client::with_uri_str(&uri)

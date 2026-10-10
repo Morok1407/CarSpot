@@ -12,10 +12,13 @@ export interface ParkingSpot extends SpotInput {
   created_at_ms: number;
   updated_at_ms: number;
   active_visit: Visit | null;
-  last_visit: Visit | null;
 }
 export type TariffMode = "planned" | "open";
-export type PaymentMethod = "cash" | "card";
+export type PaymentMethod = "cash" | "card" | "mixed";
+export interface PaymentSplit {
+  cash_amount: number;
+  card_amount: number;
+}
 export interface AdmissionInput {
   license_plate: string;
   entry_at_ms: number;
@@ -30,8 +33,17 @@ export interface Visit extends AdmissionInput {
     amount: number;
     paid_at_ms: number;
     departure_at_ms: number;
+    cash_amount?: number | null;
+    card_amount?: number | null;
   } | null;
   exited_at_ms: number | null;
+}
+export interface CompletedVisit {
+  _id: string;
+  spot_id: string;
+  spot_number: string;
+  vehicle_type: VehicleType;
+  visit: Visit;
 }
 export interface ApiError {
   code: string;
@@ -39,6 +51,8 @@ export interface ApiError {
 }
 /** Requires the desktop Tauri runtime (npm run tauri dev). */
 export const parkingApi = {
+  history: (after: string | null = null, limit = 200) =>
+    invoke<CompletedVisit[]>("list_completed_visits", { after, limit }),
   list: (status: SpotStatus | null = null, offset = 0, limit = 100) =>
     invoke<ParkingSpot[]>("list_parking_spots", { status, offset, limit }),
   get: (id: string) => invoke<ParkingSpot>("get_parking_spot", { id }),
@@ -58,6 +72,7 @@ export const parkingApi = {
     departureAtMs: number,
     method: PaymentMethod,
     expectedAmount: number,
+    split: PaymentSplit | null = null,
   ) =>
     invoke<ParkingSpot>("pay_visit", {
       id,
@@ -65,6 +80,7 @@ export const parkingApi = {
       departureAtMs,
       method,
       expectedAmount,
+      split,
     }),
   checkout: (id: string, visitId: string) =>
     invoke<ParkingSpot>("checkout_vehicle", { id, visitId }),

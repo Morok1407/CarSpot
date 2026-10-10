@@ -8,7 +8,9 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "db:seed": "cargo run --manifest-path src-tauri/Cargo.toml --example seed"
+    "db:seed": "cargo run --manifest-path src-tauri/Cargo.toml --example seed",
+    "db:demo": "cargo run --manifest-path src-tauri/Cargo.toml --example seed_demo",
+    "test:analytics": "node --experimental-strip-types --test tests/analytics.test.mjs"
   },
   "dependencies": {
     "react": "^19.1.0",

@@ -1,4 +1,9 @@
 const paths = {
+  chart: (
+    <>
+      <path d="M4 3v17h17M8 15v-4M13 15V7M18 15V4" />
+    </>
+  ),
   grid: (
     <>
       <rect x="3" y="3" width="7" height="7" rx="1.5" />

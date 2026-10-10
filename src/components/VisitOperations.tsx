@@ -277,6 +277,9 @@ export function PaymentDialog({
   const ref = useRef<HTMLDialogElement>(null);
   const [exit, setExit] = useState(localDate(Date.now()));
   const [method, setMethod] = useState<PaymentMethod>("cash");
+  const [split, setSplit] = useState<{ cash: string; card: string } | null>(
+    null,
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const departure =
@@ -284,6 +287,17 @@ export function PaymentDialog({
       ? visit.planned_exit_at_ms!
       : new Date(exit).getTime();
   const total = amount(visit.entry_at_ms, departure, visit.hourly_rate);
+  const cash = split?.cash ?? String(Math.floor((total ?? 0) / 2));
+  const card = split?.card ?? String(Math.ceil((total ?? 0) / 2));
+  const cashAmount = Number(cash),
+    cardAmount = Number(card);
+  const splitValid =
+    total !== null &&
+    Number.isSafeInteger(cashAmount) &&
+    Number.isSafeInteger(cardAmount) &&
+    cashAmount > 0 &&
+    cardAmount > 0 &&
+    cashAmount + cardAmount === total;
   useEffect(() => {
     const dialog = ref.current!;
     dialog.showModal();
@@ -291,12 +305,21 @@ export function PaymentDialog({
   }, []);
   async function submit(e: FormEvent) {
     e.preventDefault();
-    if (busy || total === null) return;
+    if (busy || total === null || (method === "mixed" && !splitValid)) return;
     setBusy(true);
     setError("");
     try {
       onSaved(
-        await parkingApi.pay(spot.id, visit.id, departure, method, total),
+        await parkingApi.pay(
+          spot.id,
+          visit.id,
+          departure,
+          method,
+          total,
+          method === "mixed"
+            ? { cash_amount: cashAmount, card_amount: cardAmount }
+            : null,
+        ),
       );
       onClose();
     } catch (e) {
@@ -400,7 +423,55 @@ export function PaymentDialog({
             >
               Карта
             </button>
+            <button
+              type="button"
+              aria-pressed={method === "mixed"}
+              className={method === "mixed" ? "chosen" : ""}
+              onClick={() => setMethod("mixed")}
+            >
+              Смешанная
+            </button>
           </div>
+          {method === "mixed" && total !== null && (
+            <div className="payment-split">
+              <label>
+                Наличными, ₸
+                <input
+                  type="number"
+                  min="1"
+                  max={total}
+                  step="1"
+                  required
+                  value={cash}
+                  onChange={(e) => setSplit({ cash: e.target.value, card })}
+                />
+              </label>
+              <label>
+                Картой, ₸
+                <input
+                  type="number"
+                  min="1"
+                  max={total}
+                  step="1"
+                  required
+                  value={card}
+                  onChange={(e) => setSplit({ cash, card: e.target.value })}
+                />
+              </label>
+              <button
+                type="button"
+                className="text-button"
+                onClick={() => setSplit(null)}
+              >
+                Разделить поровну
+              </button>
+              <small role="status">
+                {splitValid
+                  ? `Итого: ${money(cashAmount + cardAmount)}`
+                  : `Укажите две положительные суммы с итогом ${money(total)}. Сейчас: ${money((Number.isFinite(cashAmount) ? cashAmount : 0) + (Number.isFinite(cardAmount) ? cardAmount : 0))}.`}
+              </small>
+            </div>
+          )}
           <p className="muted">
             Кнопка фиксирует полученную оплату. Деньги с карты не списываются.
           </p>
@@ -419,7 +490,7 @@ export function PaymentDialog({
             </button>
             <button
               className="button primary"
-              disabled={total === null}
+              disabled={total === null || (method === "mixed" && !splitValid)}
               type="submit"
             >
               {busy ? "Сохранение…" : "Оплатить"}
@@ -487,9 +558,27 @@ export function VisitSummary({
           <div>
             <strong>Оплачено {money(visit.payment.amount)}</strong>
             <small>
-              {visit.payment.method === "cash" ? "Наличные" : "Карта"} ·{" "}
-              {dateTime(visit.payment.paid_at_ms)}
+              {visit.payment.method === "mixed"
+                ? "Смешанная"
+                : visit.payment.method === "cash"
+                  ? "Наличные"
+                  : "Карта"}{" "}
+              · {dateTime(visit.payment.paid_at_ms)}
             </small>
+            {visit.payment.method === "mixed" && (
+              <small>
+                Наличные:{" "}
+                {money(
+                  visit.payment.cash_amount ??
+                    Math.floor(visit.payment.amount / 2),
+                )}{" "}
+                · Карта:{" "}
+                {money(
+                  visit.payment.card_amount ??
+                    Math.ceil(visit.payment.amount / 2),
+                )}
+              </small>
+            )}
           </div>
         </div>
       ) : (
